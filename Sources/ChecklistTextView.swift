@@ -55,17 +55,8 @@ extension NSAttributedString.Key {
 /// characters stay in the text (so copy, undo and persistence are plain
 /// strings); only their pixels are replaced.
 final class ChecklistLayoutManager: NSLayoutManager {
-    static let symbolPointSize: CGFloat = 15
+    static let boxSize: CGFloat = 15
     static let baseFont = NSFont.systemFont(ofSize: 14)
-
-    static func symbol(done: Bool) -> NSImage {
-        let color: NSColor = done ? .controlAccentColor : .secondaryLabelColor
-        let cfg = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .medium)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
-        let name = done ? "checkmark.square.fill" : "square"
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)!
-            .withSymbolConfiguration(cfg)!
-    }
 
     /// Where the box for the marker at character `charIndex` is drawn, in text view coordinates
     /// (before the text container origin is applied).
@@ -75,12 +66,42 @@ final class ChecklistLayoutManager: NSLayoutManager {
         let lineRect = lineFragmentRect(forGlyphAt: g.location, effectiveRange: nil)
         let baseline = lineRect.minY + location(forGlyphAt: g.location).y
         let glyphRect = boundingRect(forGlyphRange: g, in: container)
-        let size = symbol(done: false).size
+        let size = Self.boxSize
         let capMid = baseline - Self.baseFont.capHeight / 2
-        return NSRect(x: glyphRect.minX, y: capMid - size.height / 2, width: size.width, height: size.height)
+        return NSRect(x: glyphRect.minX + 1, y: (capMid - size / 2).rounded(), width: size, height: size)
     }
 
-    private func symbol(done: Bool) -> NSImage { Self.symbol(done: done) }
+    /// An open item is a quiet rounded outline. A done one is the same shape
+    /// with a soft accent tint and a checkmark — finished, not shouting.
+    static func drawBox(in rect: NSRect, done: Bool) {
+        let box = NSBezierPath(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75), xRadius: 4.5, yRadius: 4.5)
+        box.lineWidth = 1.5
+        let accent = NSColor.controlAccentColor
+
+        if done {
+            accent.withAlphaComponent(0.14).setFill()
+            box.fill()
+            accent.withAlphaComponent(0.55).setStroke()
+            box.stroke()
+
+            // Checkmark. The view is flipped, so y grows downward.
+            let w = rect.width, h = rect.height, x = rect.minX, y = rect.minY
+            let check = NSBezierPath()
+            check.lineWidth = 1.8
+            check.lineCapStyle = .round
+            check.lineJoinStyle = .round
+            check.move(to: NSPoint(x: x + w * 0.28, y: y + h * 0.53))
+            check.line(to: NSPoint(x: x + w * 0.44, y: y + h * 0.70))
+            check.line(to: NSPoint(x: x + w * 0.74, y: y + h * 0.33))
+            accent.setStroke()
+            check.stroke()
+        } else {
+            NSColor.labelColor.withAlphaComponent(0.03).setFill()
+            box.fill()
+            NSColor.secondaryLabelColor.withAlphaComponent(0.7).setStroke()
+            box.stroke()
+        }
+    }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
@@ -90,8 +111,7 @@ final class ChecklistLayoutManager: NSLayoutManager {
             guard let done = value as? Bool, var rect = boxRect(forMarkerAt: range.location) else { return }
             rect.origin.x += origin.x
             rect.origin.y += origin.y
-            symbol(done: done).draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
-                                    respectFlipped: true, hints: nil)
+            Self.drawBox(in: rect, done: done)
         }
     }
 }
@@ -103,7 +123,7 @@ final class ChecklistNSTextView: NSTextView {
     private lazy var markerAdvance: CGFloat =
         NSAttributedString(string: String(Marker.todo), attributes: [.font: markerFont]).size().width
     private lazy var markerKern: CGFloat =
-        max(0, ChecklistLayoutManager.symbol(done: false).size.width + 3 - markerAdvance)
+        max(0, ChecklistLayoutManager.boxSize + 5 - markerAdvance)
     private lazy var spaceAdvance: CGFloat =
         NSAttributedString(string: " ", attributes: [.font: baseFont]).size().width
 

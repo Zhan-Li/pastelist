@@ -8,7 +8,7 @@ struct ContentView: View {
             ZStack(alignment: .topLeading) {
                 ChecklistTextView(text: $store.text)
                 if store.text.isEmpty {
-                    Text("Paste anything here — ⌘V")
+                    Text("Paste anything, then Tab to make a line a checkbox")
                         .foregroundStyle(.tertiary)
                         .font(.system(size: 14))
                         .padding(.horizontal, 19)

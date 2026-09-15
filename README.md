@@ -2,17 +2,17 @@
 
 **Copy anything. Paste it. It's a checklist.**
 
-PasteList is a tiny macOS menu bar app with one job: turn whatever text is on
-your clipboard into a checklist you can tick off. A meeting agenda, a recipe,
-a numbered list from an email, a Markdown todo block — paste it and every
-line becomes a checkbox.
+PasteList is a tiny macOS menu bar app with one job: turn whatever text you
+paste into a checklist you can tick off. A meeting agenda, a recipe, a
+numbered list from an email, a Markdown todo block — paste it, select the
+lines, press Tab, and every line becomes a checkbox.
 
 ```
-   Shopping:                          ○ Shopping:
-   - milk                             ○ milk
-   1. eggs             ──⌘V──▶        ○ eggs
-   - [x] bread                        ● bread
-   • call the plumber                 ○ call the plumber
+   Shopping:                          ☐ Shopping:
+   - milk                             ☐ milk
+   1. eggs             ──Tab──▶       ☐ eggs
+   - [x] bread                        ☑ bread
+   • call the plumber                 ☐ call the plumber
 ```
 
 No document to save, no window to find. It lives in the menu bar and the
@@ -20,11 +20,12 @@ list is still there next time you open it.
 
 ## What it does
 
-- **Paste** with ⌘V or the Paste button. One line, one item. Empty lines are
-  skipped.
-- **Cleans up markers.** Bullets (`-`, `*`, `•`, `>`), numbering (`1.`, `2)`,
-  `(3)`, `a.`), and checkbox syntax (`- [ ]`, `- [x]`, `☐`, `☑`, `✓`) are all
-  stripped. Lines already marked done arrive checked.
+- **Paste is just paste.** ⌘V puts the text in exactly as copied.
+- **Tab makes a line an item.** Press Tab on a line, or select several lines
+  and press Tab, and each gets a box. Bullets (`-`, `*`, `•`, `>`), numbering
+  (`1.`, `2)`, `(3)`, `a.`), and checkbox syntax (`- [ ]`, `- [x]`, `☐`, `☑`,
+  `✓`) are stripped, and lines already marked done arrive checked. Shift-Tab
+  takes the boxes off again.
 - **It is just text.** The popover is one document, like a note. Click
   anywhere and type. Enter starts the next item, Enter on an empty item
   drops its box, Backspace right after a box removes it. Click a box to tick

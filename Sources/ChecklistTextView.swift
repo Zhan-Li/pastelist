@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// A plain text view that behaves like a checklist document:
-/// - ⌘V reformats the clipboard into `☐ item` lines
+/// - ⌘V pastes plain text; Tab turns the current or selected lines into `☐ item`
+///   lines (Shift-Tab takes the boxes off again)
 /// - Enter starts a new item; Enter on an empty item removes its box
 /// - Backspace right after a box removes the box
 /// - clicking a box toggles it; ⌘↩ toggles the current line
@@ -128,46 +129,50 @@ final class ChecklistNSTextView: NSTextView {
 
     // MARK: - Paste
 
+    /// Paste is just paste. Text lands exactly as copied; Tab makes it a list.
     override func paste(_ sender: Any?) {
         guard let raw = NSPasteboard.general.string(forType: .string) else { return }
-        let items = ChecklistParser.parse(raw)
-        guard !items.isEmpty else { return }
+        let s = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        insertText(s, replacementRange: selectedRange())
+    }
 
+    // MARK: - Tab: make lines into items
+
+    override func insertTab(_ sender: Any?) { convertLines(toList: true) }
+    override func insertBacktab(_ sender: Any?) { convertLines(toList: false) }
+
+    /// Every line touched by the selection (or the cursor's line) gets a box,
+    /// with bullets, numbering and existing checkbox syntax cleaned off — or
+    /// loses its box on Shift-Tab.
+    private func convertLines(toList: Bool) {
         let sel = selectedRange()
-        let line = lineRange(at: sel.location)
-        let (body, bodyText) = lineBody(line)
-        let block = ChecklistParser.document(items)
+        // A selection ending right after a newline should not drag in the next line.
+        var probe = sel
+        if probe.length > 0, ns.character(at: probe.location + probe.length - 1) == 0x0A { probe.length -= 1 }
+        let (body, text) = lineBody(ns.lineRange(for: probe))
 
-        // Single line pasted into the middle of an item: just text, no new box.
-        if items.count == 1, sel.location > line.location, !isBareMarkerLine(bodyText) {
-            insertText(items[0].text, replacementRange: sel)
-            return
-        }
+        let converted = text.components(separatedBy: "\n").map { line -> String in
+            if toList {
+                if hasMarker(line) { return line }
+                if let item = ChecklistParser.parse(line).first { return Marker.line(item.text, done: item.done) }
+                return "\(Marker.todo) "
+            } else {
+                guard hasMarker(line) else { return line }
+                return String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+            }
+        }.joined(separator: "\n")
 
-        if bodyText.trimmingCharacters(in: .whitespaces).isEmpty || isBareMarkerLine(bodyText) {
-            // Empty line: it becomes the pasted block.
-            replace(body, with: block, select: body.location + (block as NSString).length)
-        } else if sel.location >= body.location + body.length {
-            // End of a line: the block goes underneath.
-            let s = "\n" + block
-            replace(sel, with: s, select: sel.location + (s as NSString).length)
+        guard converted != text else { return }
+        replace(body, with: converted)
+        let newLen = (converted as NSString).length
+        if sel.length == 0 {
+            setSelectedRange(NSRange(location: body.location + newLen, length: 0))
         } else {
-            // Mid-line: split the line around the block.
-            let s = "\n" + block + "\n"
-            replace(sel, with: s, select: sel.location + (s as NSString).length - 1)
+            setSelectedRange(NSRange(location: body.location, length: newLen))
         }
     }
 
     // MARK: - Typing
-
-    override func insertText(_ string: Any, replacementRange: NSRange) {
-        // First keystroke in an empty document gets a box for free.
-        if ns.length == 0, let s = string as? String, !s.isEmpty, !s.hasPrefix("\n") {
-            super.insertText("\(Marker.todo) " + s, replacementRange: replacementRange)
-            return
-        }
-        super.insertText(string, replacementRange: replacementRange)
-    }
 
     override func insertNewline(_ sender: Any?) {
         let sel = selectedRange()

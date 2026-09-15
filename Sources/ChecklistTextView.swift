@@ -347,8 +347,8 @@ final class ChecklistNSTextView: NSTextView {
             if first == Marker.done.utf16.first! {
                 storage.addAttributes([
                     .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    .strikethroughColor: NSColor.tertiaryLabelColor,
-                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .strikethroughColor: NSColor.labelColor.withAlphaComponent(0.45),
+                    .foregroundColor: NSColor.labelColor.withAlphaComponent(0.72),
                 ], range: r)
                 storage.addAttributes(self.markerAttributes(done: true), range: markerR)
             } else if first == Marker.todo.utf16.first! {

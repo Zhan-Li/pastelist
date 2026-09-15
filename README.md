@@ -33,7 +33,23 @@ list is still there next time you open it.
 - **Copy it back out** as Markdown (`- [x] done`, `- [ ] not yet`) from the
   ⋯ menu, so the list can go into a note, a message, or a pull request.
 - **Remembers the list** between launches. The footer shows how many are
-  done, and has copy, clear, and quit. That is the entire interface.
+  done, and has four buttons: shortcuts, copy, clear, quit. Hover one for a
+  hint. That is the entire interface.
+
+## Shortcuts
+
+The ⌨ button in the footer shows these inside the app too.
+
+| Keys | What happens |
+|---|---|
+| ⌘V | Paste text, exactly as copied |
+| ⇥ | Give this line, or every selected line, a checkbox |
+| ⇧⇥ | Take the checkbox off |
+| ⌘↩ | Tick or untick this line |
+| ↩ | Next item. On an empty item, drops its box |
+| ⌫ | Right after a box, removes the box |
+| ⌘Z | Undo |
+| ⇧⌘C | Copy the list as Markdown |
 
 And that is all. It is not a task manager.
 

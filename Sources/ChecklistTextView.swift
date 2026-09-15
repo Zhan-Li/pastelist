@@ -45,10 +45,67 @@ struct ChecklistTextView: NSViewRepresentable {
     }
 }
 
+extension NSAttributedString.Key {
+    /// Bool: marks a checkbox character. Its glyph is drawn transparent and a
+    /// real box is painted over it by `ChecklistLayoutManager`.
+    static let checklistMarker = NSAttributedString.Key("pastelist.marker")
+}
+
+/// Paints SF Symbol checkboxes where the document has ☐ / ☑ characters. The
+/// characters stay in the text (so copy, undo and persistence are plain
+/// strings); only their pixels are replaced.
+final class ChecklistLayoutManager: NSLayoutManager {
+    static let symbolPointSize: CGFloat = 15
+    static let baseFont = NSFont.systemFont(ofSize: 14)
+
+    static func symbol(done: Bool) -> NSImage {
+        let color: NSColor = done ? .controlAccentColor : .secondaryLabelColor
+        let cfg = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .medium)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        let name = done ? "checkmark.square.fill" : "square"
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)!
+            .withSymbolConfiguration(cfg)!
+    }
+
+    /// Where the box for the marker at character `charIndex` is drawn, in text view coordinates
+    /// (before the text container origin is applied).
+    func boxRect(forMarkerAt charIndex: Int) -> NSRect? {
+        let g = glyphRange(forCharacterRange: NSRange(location: charIndex, length: 1), actualCharacterRange: nil)
+        guard g.length > 0, let container = textContainer(forGlyphAt: g.location, effectiveRange: nil) else { return nil }
+        let lineRect = lineFragmentRect(forGlyphAt: g.location, effectiveRange: nil)
+        let baseline = lineRect.minY + location(forGlyphAt: g.location).y
+        let glyphRect = boundingRect(forGlyphRange: g, in: container)
+        let size = symbol(done: false).size
+        let capMid = baseline - Self.baseFont.capHeight / 2
+        return NSRect(x: glyphRect.minX, y: capMid - size.height / 2, width: size.width, height: size.height)
+    }
+
+    private func symbol(done: Bool) -> NSImage { Self.symbol(done: done) }
+
+    override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+        guard let storage = textStorage else { return }
+        let chars = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        storage.enumerateAttribute(.checklistMarker, in: chars, options: []) { value, range, _ in
+            guard let done = value as? Bool, var rect = boxRect(forMarkerAt: range.location) else { return }
+            rect.origin.x += origin.x
+            rect.origin.y += origin.y
+            symbol(done: done).draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
+                                    respectFlipped: true, hints: nil)
+        }
+    }
+}
+
 final class ChecklistNSTextView: NSTextView {
-    private let baseFont = NSFont.systemFont(ofSize: 14)
-    /// Both box glyphs from one face so they match in weight and size.
+    private let baseFont = ChecklistLayoutManager.baseFont
+    /// The marker character reserves the box's horizontal space; its own glyph is invisible.
     private let markerFont = NSFont(name: "Apple Symbols", size: 16) ?? NSFont.systemFont(ofSize: 16)
+    private lazy var markerAdvance: CGFloat =
+        NSAttributedString(string: String(Marker.todo), attributes: [.font: markerFont]).size().width
+    private lazy var markerKern: CGFloat =
+        max(0, ChecklistLayoutManager.symbol(done: false).size.width + 3 - markerAdvance)
+    private lazy var spaceAdvance: CGFloat =
+        NSAttributedString(string: " ", attributes: [.font: baseFont]).size().width
 
     override init(frame: NSRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -58,7 +115,7 @@ final class ChecklistNSTextView: NSTextView {
     convenience init() {
         // Build our own container so the view tracks the scroll view's width.
         let storage = NSTextStorage()
-        let layout = NSLayoutManager()
+        let layout = ChecklistLayoutManager()
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
@@ -249,7 +306,7 @@ final class ChecklistNSTextView: NSTextView {
         p.lineSpacing = 3
         p.paragraphSpacing = 2
         // Wrapped lines indent under the text, not under the box.
-        p.headIndent = 22
+        p.headIndent = markerAdvance + markerKern + spaceAdvance
         return p
     }
 
@@ -273,19 +330,36 @@ final class ChecklistNSTextView: NSTextView {
                     .strikethroughColor: NSColor.tertiaryLabelColor,
                     .foregroundColor: NSColor.secondaryLabelColor,
                 ], range: r)
-                storage.addAttributes([
-                    .font: self.markerFont,
-                    .foregroundColor: NSColor.controlAccentColor,
-                    .strikethroughStyle: 0,
-                ], range: markerR)
+                storage.addAttributes(self.markerAttributes(done: true), range: markerR)
             } else if first == Marker.todo.utf16.first! {
-                storage.addAttributes([
-                    .font: self.markerFont,
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ], range: markerR)
+                storage.addAttributes(self.markerAttributes(done: false), range: markerR)
             }
         }
         storage.endEditing()
         typingAttributes = baseAttributes
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func markerAttributes(done: Bool) -> [NSAttributedString.Key: Any] {
+        [
+            .font: markerFont,
+            .foregroundColor: NSColor.clear,
+            .strikethroughStyle: 0,
+            .kern: markerKern,
+            .checklistMarker: done,
+        ]
+    }
+
+    /// A pointing hand over every box, so it reads as clickable.
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let lm = layoutManager as? ChecklistLayoutManager, let storage = textStorage else { return }
+        let full = NSRange(location: 0, length: ns.length)
+        storage.enumerateAttribute(.checklistMarker, in: full, options: []) { value, range, _ in
+            guard value != nil, var r = lm.boxRect(forMarkerAt: range.location) else { return }
+            r.origin.x += textContainerOrigin.x
+            r.origin.y += textContainerOrigin.y
+            addCursorRect(r.insetBy(dx: -2, dy: -2), cursor: .pointingHand)
+        }
     }
 }

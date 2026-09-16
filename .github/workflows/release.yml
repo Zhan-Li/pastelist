@@ -85,6 +85,15 @@ jobs:
           Requires macOS 14 or later. Universal — Apple Silicon and Intel.
           EOF
 
-          gh release create "$GITHUB_REF_NAME" dist/*.dmg \
-            --title "PasteList $GITHUB_REF_NAME" \
-            --notes-file "$NOTES"
+          # Re-running this job, or a release created by hand for the same
+          # tag, must not fail: update what is there instead of colliding.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "PasteList $GITHUB_REF_NAME" \
+              --notes-file "$NOTES"
+            gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.dmg \
+              --title "PasteList $GITHUB_REF_NAME" \
+              --notes-file "$NOTES"
+          fi

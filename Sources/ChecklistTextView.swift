@@ -10,12 +10,15 @@ import SwiftUI
 /// - done lines are struck through
 struct ChecklistTextView: NSViewRepresentable {
     @Binding var text: String
+    @Binding var selection: NSRange
+    let proxy: TextViewProxy
 
     func makeNSView(context: Context) -> NSScrollView {
         let tv = ChecklistNSTextView()
         tv.delegate = context.coordinator
         tv.string = text
         tv.restyle()
+        proxy.view = tv
 
         let scroll = NSScrollView()
         scroll.documentView = tv
@@ -42,13 +45,33 @@ struct ChecklistTextView: NSViewRepresentable {
             tv.restyle()
             parent.text = tv.string
         }
+
+        func textViewDidChangeSelection(_ n: Notification) {
+            guard let tv = n.object as? ChecklistNSTextView else { return }
+            parent.selection = tv.selectedRange()
+        }
     }
+}
+
+/// Lets SwiftUI reach the text view for edits that must go through it, so
+/// they land in the undo stack and respect the cursor like typing would.
+final class TextViewProxy {
+    weak var view: ChecklistNSTextView?
 }
 
 extension NSAttributedString.Key {
     /// Bool: marks a checkbox character. Its glyph is drawn transparent and a
     /// real box is painted over it by `ChecklistLayoutManager`.
     static let checklistMarker = NSAttributedString.Key("pastelist.marker")
+    /// LabelPaint: a `#label` token. `ChecklistLayoutManager` draws a colour
+    /// pill behind it.
+    static let checklistLabel = NSAttributedString.Key("pastelist.label")
+}
+
+final class LabelPaint {
+    let color: NSColor
+    let done: Bool
+    init(color: NSColor, done: Bool) { self.color = color; self.done = done }
 }
 
 /// Paints SF Symbol checkboxes where the document has ☐ / ☑ characters. The
@@ -57,6 +80,7 @@ extension NSAttributedString.Key {
 final class ChecklistLayoutManager: NSLayoutManager {
     static let boxSize: CGFloat = 15
     static let baseFont = NSFont.systemFont(ofSize: 14)
+    static let labelFont = NSFont.systemFont(ofSize: 12, weight: .medium)
 
     /// Where the box for the marker at character `charIndex` is drawn, in text view coordinates
     /// (before the text container origin is applied).
@@ -100,6 +124,32 @@ final class ChecklistLayoutManager: NSLayoutManager {
             box.fill()
             NSColor.secondaryLabelColor.withAlphaComponent(0.7).setStroke()
             box.stroke()
+        }
+    }
+
+    /// A rounded pill in the label's colour, sitting behind its text.
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard let storage = textStorage else { return }
+        let chars = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        storage.enumerateAttribute(.checklistLabel, in: chars, options: []) { value, range, _ in
+            guard let paint = value as? LabelPaint else { return }
+            // The whole token, even if this pass only covers part of it. The #
+            // is a separate run (its colour differs), so ask for the longest range.
+            var whole = NSRange()
+            _ = storage.attribute(.checklistLabel, at: range.location, longestEffectiveRange: &whole,
+                                  in: NSRange(location: 0, length: storage.length))
+            let g = glyphRange(forCharacterRange: whole, actualCharacterRange: nil)
+            guard g.length > 0, let container = textContainer(forGlyphAt: g.location, effectiveRange: nil) else { return }
+            let lineRect = lineFragmentRect(forGlyphAt: g.location, effectiveRange: nil)
+            let baseline = lineRect.minY + location(forGlyphAt: g.location).y
+            var rect = boundingRect(forGlyphRange: g, in: container)
+            let cap = Self.labelFont.capHeight
+            rect.origin.y = baseline - cap - 4
+            rect.size.height = cap + 8
+            rect = rect.insetBy(dx: -3.5, dy: 0).offsetBy(dx: origin.x, dy: origin.y)
+            paint.color.withAlphaComponent(paint.done ? 0.09 : 0.17).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
         }
     }
 
@@ -319,6 +369,59 @@ final class ChecklistNSTextView: NSTextView {
         setSelectedRange(sel)
     }
 
+    // MARK: - Labels
+
+    /// Puts `#name` at the end of every line the selection touches, or takes it
+    /// off. `on` nil toggles: off if every touched line already has it, else on.
+    /// One edit, one undo step.
+    func setLabel(_ name: String, on: Bool?) {
+        let sel = selectedRange()
+        var probe = sel
+        if probe.length > 0, ns.character(at: probe.location + probe.length - 1) == 0x0A { probe.length -= 1 }
+        let (body, text) = lineBody(ns.lineRange(for: probe))
+        let lines = text.components(separatedBy: "\n")
+        let key = name.lowercased()
+
+        func has(_ line: String) -> Bool {
+            Labels.tokens(in: line as NSString).contains { $0.name.lowercased() == key }
+        }
+        func isBlank(_ line: String) -> Bool {
+            line.trimmingCharacters(in: .whitespaces).isEmpty || isBareMarkerLine(line)
+        }
+        let touched = lines.filter { !isBlank($0) }
+        let adding = on ?? !(touched.isEmpty ? lines : touched).allSatisfy(has)
+
+        let converted = lines.map { line -> String in
+            let lineNS = line as NSString
+            if adding {
+                // With several lines selected, blank ones stay blank.
+                if has(line) || (lines.count > 1 && isBlank(line)) { return line }
+                let trimmed = line.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression)
+                return trimmed.isEmpty ? "#\(name)" : "\(trimmed) #\(name)"
+            }
+            var out = line
+            for t in Labels.tokens(in: lineNS).reversed() where t.name.lowercased() == key {
+                var r = t.range
+                // Take the space before the label with it.
+                if r.location > 0, lineNS.character(at: r.location - 1) == 0x20 {
+                    r.location -= 1
+                    r.length += 1
+                }
+                out = (out as NSString).replacingCharacters(in: r, with: "")
+            }
+            return out
+        }.joined(separator: "\n")
+
+        guard converted != text else { return }
+        replace(body, with: converted)
+        let newLen = (converted as NSString).length
+        if sel.length == 0 {
+            setSelectedRange(NSRange(location: body.location + newLen, length: 0))
+        } else {
+            setSelectedRange(NSRange(location: body.location, length: newLen))
+        }
+    }
+
     // MARK: - Styling
 
     private var paragraphStyle: NSParagraphStyle {
@@ -344,7 +447,8 @@ final class ChecklistNSTextView: NSTextView {
             guard r.length > 0 else { return }
             let first = self.ns.character(at: r.location)
             let markerR = NSRange(location: r.location, length: 1)
-            if first == Marker.done.utf16.first! {
+            let done = first == Marker.done.utf16.first!
+            if done {
                 storage.addAttributes([
                     .strikethroughStyle: NSUnderlineStyle.single.rawValue,
                     .strikethroughColor: NSColor.labelColor.withAlphaComponent(0.45),
@@ -353,6 +457,30 @@ final class ChecklistNSTextView: NSTextView {
                 storage.addAttributes(self.markerAttributes(done: true), range: markerR)
             } else if first == Marker.todo.utf16.first! {
                 storage.addAttributes(self.markerAttributes(done: false), range: markerR)
+            }
+            for t in Labels.tokens(in: self.ns, range: r) {
+                // A done line's strikethrough stops short of the pill and the
+                // spaces beside it, so it does not draw dashes between pills.
+                var gap = t.range
+                if gap.location > r.location, self.ns.character(at: gap.location - 1) == 0x20 {
+                    gap.location -= 1
+                    gap.length += 1
+                }
+                if NSMaxRange(gap) < NSMaxRange(r), self.ns.character(at: NSMaxRange(gap)) == 0x20 {
+                    gap.length += 1
+                }
+                storage.addAttribute(.strikethroughStyle, value: 0, range: gap)
+                let color = LabelColors.shared.color(for: t.name)
+                let textColor = LabelColors.textColor(for: color).withAlphaComponent(done ? 0.55 : 1)
+                storage.addAttributes([
+                    .font: ChecklistLayoutManager.labelFont,
+                    .foregroundColor: textColor,
+                    .strikethroughStyle: 0,
+                    .checklistLabel: LabelPaint(color: color, done: done),
+                ], range: t.range)
+                // The # is part of the text but reads best as a quiet prefix.
+                storage.addAttribute(.foregroundColor, value: textColor.withAlphaComponent(done ? 0.35 : 0.5),
+                                     range: NSRange(location: t.range.location, length: 1))
             }
         }
         storage.endEditing()

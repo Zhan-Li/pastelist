@@ -12,7 +12,7 @@ lines, press Tab, and every line becomes a checkbox.
    - milk                             ☐ milk
    1. eggs             ──Tab──▶       ☐ eggs
    - [x] bread                        ☑ bread
-   • call the plumber                 ☐ call the plumber
+   • call the plumber #p1             ☐ call the plumber [#p1]
 ```
 
 No document to save, no window to find. It lives in the menu bar and the
@@ -30,10 +30,15 @@ list is still there next time you open it.
   anywhere and type. Enter starts the next item, Enter on an empty item
   drops its box, Backspace right after a box removes it. Click a box to tick
   it, or press ⌘↩ on the line. Undo works.
+- **Labels are hashtags.** Type `#p1`, `#blocked`, any word you like, on a
+  line and it becomes a coloured label. There are no built-in labels: one
+  exists because you typed it. Each new label picks its own colour, and
+  keeps it. The ⌘L panel lists the labels in your document; click one to put
+  it on the current line or take it off, or type a new one.
 - **Copy it back out** as Markdown (`- [x] done`, `- [ ] not yet`) from the
   ⋯ menu, so the list can go into a note, a message, or a pull request.
 - **Remembers the list** between launches. The footer shows how many are
-  done, and has four buttons: shortcuts, copy, clear, quit. Hover one for a
+  done, and has five buttons: labels, shortcuts, copy, clear, quit. Hover one for a
   hint. That is the entire interface.
 
 ## Shortcuts
@@ -48,6 +53,8 @@ The ⌨ button in the footer shows these inside the app too.
 | ⌘↩ | Tick or untick this line |
 | ↩ | Next item. On an empty item, drops its box |
 | ⌫ | Right after a box, removes the box |
+| # | Type `#word` on a line to label it |
+| ⌘L | Labels: click one for this line, or add a new one |
 | ⌘Z | Undo |
 | ⇧⌘C | Copy the list as Markdown |
 

@@ -108,12 +108,101 @@ enum ChecklistParser {
     }
 }
 
+/// Labels are `#word` tokens typed on a line — `☐ fix login #p1 #blocked`.
+/// The user invents them; nothing is predefined. A label is ordinary text in
+/// the document, so it survives copy, undo, Markdown export and persistence.
+enum Labels {
+    /// `#` at the start of a line or after whitespace, then letters, digits, `_` or `-`.
+    static let regex = try! NSRegularExpression(pattern: #"(?<![^\s])#([\p{L}\p{N}_\-]+)"#)
+
+    /// Every label token in `s` (UTF-16 ranges that include the `#`) with its name.
+    static func tokens(in s: NSString, range: NSRange? = nil) -> [(range: NSRange, name: String)] {
+        let r = range ?? NSRange(location: 0, length: s.length)
+        return regex.matches(in: s as String, range: r).map { ($0.range, s.substring(with: $0.range(at: 1))) }
+    }
+
+    /// Distinct labels in the document, in order of first appearance, spelled
+    /// the way they were first typed. Matching is case-insensitive.
+    static func all(inDocument doc: String) -> [String] {
+        var seen = Set<String>(), out: [String] = []
+        for t in tokens(in: doc as NSString) where seen.insert(t.name.lowercased()).inserted {
+            out.append(t.name)
+        }
+        return out
+    }
+
+    /// What a name typed into the Labels panel becomes: no leading `#`, spaces
+    /// turn into dashes, anything else unusable is dropped. Nil if nothing is left.
+    static func normalize(_ raw: String) -> String? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while s.hasPrefix("#") { s.removeFirst() }
+        s = s.split(whereSeparator: { $0.isWhitespace }).joined(separator: "-")
+        s = String(s.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" })
+        return s.isEmpty ? nil : s
+    }
+}
+
+/// Gives each label a colour the first time it is seen and remembers it, so
+/// `#p1` stays the same colour for as long as it is in the document. A new
+/// label takes the least-used colour, so a handful of labels always look
+/// different from each other.
+@MainActor
+final class LabelColors {
+    static let shared = LabelColors()
+    static let palette: [NSColor] = [
+        .systemBlue, .systemOrange, .systemGreen, .systemPurple, .systemPink, .systemTeal,
+        .systemYellow, .systemIndigo, .systemRed, .systemBrown, .systemMint, .systemCyan,
+    ]
+
+    private let key = "pastelist.labelColors"
+    private var assigned: [String: Int]   // lowercased name → palette index
+
+    private init() {
+        assigned = UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:]
+    }
+
+    func color(for name: String) -> NSColor {
+        let k = name.lowercased()
+        if let i = assigned[k], i < Self.palette.count { return Self.palette[i] }
+        var counts = Array(repeating: 0, count: Self.palette.count)
+        for i in assigned.values where i < counts.count { counts[i] += 1 }
+        let i = counts.indices.min { (counts[$0], $0) < (counts[$1], $1) }!
+        assigned[k] = i
+        save()
+        return Self.palette[i]
+    }
+
+    /// The label's text colour: its hue pulled towards the label colour of the
+    /// current appearance, so yellow is readable on white and blue on black.
+    static func textColor(for color: NSColor) -> NSColor {
+        color.blended(withFraction: 0.35, of: .labelColor) ?? color
+    }
+
+    /// Forget labels that have left the document, so their colours free up.
+    func prune(keeping names: [String]) {
+        let live = Set(names.map { $0.lowercased() })
+        let before = assigned.count
+        assigned = assigned.filter { live.contains($0.key) }
+        if assigned.count != before { save() }
+    }
+
+    private func save() { UserDefaults.standard.set(assigned, forKey: key) }
+}
+
 /// The document is one string, persisted as-is.
 @MainActor
 final class DocStore: ObservableObject {
     @Published var text: String {
-        didSet { if text != oldValue { UserDefaults.standard.set(text, forKey: key) } }
+        didSet {
+            guard text != oldValue else { return }
+            UserDefaults.standard.set(text, forKey: key)
+            LabelColors.shared.prune(keeping: labels)
+        }
     }
+    /// Where the cursor is, so the Labels panel knows which line "this line" is.
+    @Published var selection = NSRange(location: 0, length: 0)
+    /// The live text view, for edits that must go through it (undo, selection).
+    let textView = TextViewProxy()
 
     private let key = "pastelist.document"
 
@@ -122,6 +211,26 @@ final class DocStore: ObservableObject {
     }
 
     var counts: (done: Int, total: Int) { ChecklistParser.counts(inDocument: text) }
+
+    var labels: [String] { Labels.all(inDocument: text) }
+
+    /// Lowercased names of the labels on the cursor's line.
+    var labelsOnCurrentLine: Set<String> {
+        let ns = text as NSString
+        guard ns.length > 0 else { return [] }
+        let line = ns.lineRange(for: NSRange(location: min(selection.location, ns.length), length: 0))
+        return Set(Labels.tokens(in: ns, range: line).map { $0.name.lowercased() })
+    }
+
+    /// Puts `#name` on the current line, or takes it off if it is already there.
+    func toggleLabel(_ name: String) { textView.view?.setLabel(name, on: nil) }
+
+    /// Puts `#name` on the current line (a no-op if it is already there).
+    func addLabel(_ name: String) { textView.view?.setLabel(name, on: true) }
+
+    func focusDocument() {
+        if let tv = textView.view { tv.window?.makeFirstResponder(tv) }
+    }
 
     func copyAsMarkdown() {
         let pb = NSPasteboard.general

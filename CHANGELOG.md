@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- An app icon: a blue tile with a ticked-off list, so PasteList is
+  recognisable in Finder, the DMG and the Gatekeeper dialog.
+
 ## 1.0.0
 
 - First release.

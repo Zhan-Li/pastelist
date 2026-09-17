@@ -97,6 +97,7 @@ Sources/
   Model.swift              the text→checklist parser, Markdown export, persistence
 Resources/
   Info.plist
+  AppIcon.icns       the Finder icon; make-icon.swift draws it from scratch
 build.sh             swiftc build, universal, ad-hoc signed
 release.sh           build + package as .dmg
 ```

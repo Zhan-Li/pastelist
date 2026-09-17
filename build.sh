@@ -13,6 +13,7 @@ BUNDLE="$BUILD/$APP_NAME.app"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp "$ROOT/Resources/Info.plist" "$BUNDLE/Contents/Info.plist"
+cp "$ROOT/Resources/AppIcon.icns" "$BUNDLE/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$BUNDLE/Contents/PkgInfo"
 
 # Universal binary. Set PASTELIST_ARCH=native for a fast single-slice dev build;

@@ -1,9 +1,14 @@
 name: Release
 
-# Push a tag to publish a release:
-#     git tag v1.0.0 && git push origin v1.0.0
+# Every push to main builds the app. When the version in Resources/Info.plist
+# has no release yet, the build is published as one, tagged v<version>. So a
+# release is: bump the version, add a CHANGELOG section, push.
+#
+# A hand-pushed tag (git tag v1.0.0 && git push origin v1.0.0) still works,
+# and "Run workflow" builds a given version without publishing it.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -27,16 +32,27 @@ jobs:
         id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          PUBLISH=false
           if [ -n "$INPUT_VERSION" ]; then
             VALUE="$INPUT_VERSION"
-          else
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
             VALUE="${GITHUB_REF_NAME#v}"
+            PUBLISH=true
+          else
+            VALUE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+            if gh release view "v$VALUE" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "v$VALUE" >/dev/null; then
+              echo "v$VALUE is already released; building only"
+            else
+              PUBLISH=true
+            fi
           fi
           case "$VALUE" in
             ""|*[!0-9.]*) echo "::error::refusing to build version '$VALUE'"; exit 1 ;;
           esac
           echo "value=$VALUE" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
 
       - name: Build DMG
         run: ./release.sh "${{ steps.version.outputs.value }}"
@@ -54,14 +70,16 @@ jobs:
           path: dist/*.dmg
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
+          TAG="v$VERSION"
           NOTES="$(mktemp)"
 
           # Lift this version's section out of CHANGELOG.md.
-          awk -v want="## ${GITHUB_REF_NAME#v}" '
+          awk -v want="## $VERSION" '
             $0 == want { found = 1; next }
             found && /^## / { exit }
             found { print }
@@ -71,7 +89,7 @@ jobs:
             echo "## What changed" >> "$NOTES"
             cat /tmp/changelog-section >> "$NOTES"
           else
-            echo "::warning::no CHANGELOG.md entry for ${GITHUB_REF_NAME#v}"
+            echo "::warning::no CHANGELOG.md entry for $VERSION"
           fi
 
           cat >> "$NOTES" <<'EOF'
@@ -87,13 +105,16 @@ jobs:
 
           # Re-running this job, or a release created by hand for the same
           # tag, must not fail: update what is there instead of colliding.
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" \
-              --title "PasteList $GITHUB_REF_NAME" \
+          # On a main push the tag does not exist yet; --target makes
+          # `gh release create` cut it at this commit.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "PasteList $TAG" \
               --notes-file "$NOTES"
-            gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+            gh release upload "$TAG" dist/*.dmg --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.dmg \
-              --title "PasteList $GITHUB_REF_NAME" \
+            gh release create "$TAG" dist/*.dmg \
+              --target "$GITHUB_SHA" \
+              --title "PasteList $TAG" \
               --notes-file "$NOTES"
           fi

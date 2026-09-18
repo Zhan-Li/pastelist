@@ -11,6 +11,9 @@ import SwiftUI
 struct ChecklistTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var selection: NSRange
+    /// Which tab the text belongs to. When it changes the view swaps documents:
+    /// new text, the tab's remembered cursor, and a fresh undo stack.
+    let tabID: UUID
     let proxy: TextViewProxy
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -19,6 +22,7 @@ struct ChecklistTextView: NSViewRepresentable {
         tv.string = text
         tv.restyle()
         proxy.view = tv
+        context.coordinator.loadedTab = tabID
 
         let scroll = NSScrollView()
         scroll.documentView = tv
@@ -29,7 +33,23 @@ struct ChecklistTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let tv = scroll.documentView as? ChecklistNSTextView, tv.string != text else { return }
+        guard let tv = scroll.documentView as? ChecklistNSTextView else { return }
+        if context.coordinator.loadedTab != tabID {
+            context.coordinator.loadedTab = tabID
+            tv.string = text
+            tv.restyle()
+            tv.undoManager?.removeAllActions()
+            let len = (text as NSString).length
+            let loc = min(selection.location, len)
+            let sel = NSRange(location: loc, length: min(selection.length, len - loc))
+            // Not inside SwiftUI's update: the selection change reports back into the store.
+            DispatchQueue.main.async {
+                tv.setSelectedRange(sel)
+                tv.scrollRangeToVisible(sel)
+            }
+            return
+        }
+        guard tv.string != text else { return }
         tv.string = text
         tv.restyle()
     }
@@ -38,6 +58,7 @@ struct ChecklistTextView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChecklistTextView
+        var loadedTab: UUID?
         init(_ parent: ChecklistTextView) { self.parent = parent }
 
         func textDidChange(_ n: Notification) {

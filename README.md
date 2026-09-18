@@ -18,6 +18,8 @@ lines, press Tab, and every line becomes a checkbox.
 No document to save, no window to find. It lives in the menu bar and the
 list is still there next time you open it.
 
+![PasteList: paste a list, press Tab, tick things off, keep a few lists in tabs](docs/demo.gif)
+
 ## What it does
 
 - **Paste is just paste.** ⌘V puts the text in exactly as copied.
@@ -35,10 +37,15 @@ list is still there next time you open it.
   exists because you typed it. Each new label picks its own colour, and
   keeps it. The ⌘L panel lists the labels in your document; click one to put
   it on the current line or take it off, or type a new one.
+- **Tabs, when one list is not enough.** ⌘T opens another list beside the
+  first. Double-click a tab to name it. Each tab picks its own colour, so
+  *Groceries* and *Work* look different at a glance. ⌘1 to ⌘9 jump between
+  them, ⇧⌘[ and ⇧⌘] step through them, and the × on the current tab closes it.
 - **Copy it back out** as Markdown (`- [x] done`, `- [ ] not yet`) from the
   ⋯ menu, so the list can go into a note, a message, or a pull request.
-- **Remembers the list** between launches. The footer shows how many are
-  done, and has five buttons: labels, shortcuts, copy, clear, quit. Hover one for a
+- **Remembers everything** between launches: every tab, its name, its colour,
+  its list. The footer shows how many are done in the tab you are looking at,
+  and has five buttons: labels, shortcuts, copy, clear, quit. Hover one for a
   hint. That is the entire interface.
 
 ## Shortcuts
@@ -55,6 +62,8 @@ The ⌨ button in the footer shows these inside the app too.
 | ⌫ | Right after a box, removes the box |
 | # | Type `#word` on a line to label it |
 | ⌘L | Labels: click one for this line, or add a new one |
+| ⌘T | New tab. Double-click a tab to rename it |
+| ⌘1–9 | Jump to a tab. ⇧⌘[ and ⇧⌘] step through them |
 | ⌘Z | Undo |
 | ⇧⌘C | Copy the list as Markdown |
 
@@ -99,9 +108,11 @@ cd pastelist
 ```
 Sources/
   App.swift          MenuBarExtra entry point
-  ContentView.swift        the popover: the document plus a slim footer
+  ContentView.swift        the popover: tab bar, the document, a slim footer
   ChecklistTextView.swift  NSTextView subclass: paste, Enter, Backspace, click-to-tick, styling
-  Model.swift              the text→checklist parser, Markdown export, persistence
+  Model.swift              the text→checklist parser, Markdown export, tabs and persistence
+docs/
+  demo.gif           the recording above
 Resources/
   Info.plist
   AppIcon.icns       the Finder icon; make-icon.swift draws it from scratch

@@ -7,9 +7,12 @@ struct ContentView: View {
     @State private var showLabels = false
 
     var body: some View {
+        let text = Binding(get: { store.text }, set: { store.text = $0 })
         VStack(spacing: 0) {
+            TabBar()
+            Divider()
             ZStack(alignment: .topLeading) {
-                ChecklistTextView(text: $store.text, selection: $store.selection, proxy: store.textView)
+                ChecklistTextView(text: text, selection: $store.selection, tabID: store.currentID, proxy: store.textView)
                 if store.text.isEmpty { placeholder }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -38,7 +41,7 @@ struct ContentView: View {
             Divider()
             footer
         }
-        .frame(width: 380, height: 460)
+        .frame(width: 380, height: 480)
         .animation(.easeOut(duration: 0.12), value: tip)
         .animation(.easeOut(duration: 0.18), value: showShortcuts)
         .animation(.easeOut(duration: 0.18), value: showLabels)
@@ -77,12 +80,165 @@ struct ContentView: View {
             FooterButton("doc.on.doc", "Copy as Markdown  ⇧⌘C", tip: $tip) { store.copyAsMarkdown() }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(store.text.isEmpty)
-            FooterButton("trash", "Clear everything", tip: $tip) { store.clear() }
+            FooterButton("trash", "Clear this list", tip: $tip) { store.clear() }
                 .disabled(store.text.isEmpty)
             FooterButton("power", "Quit PasteList  ⌘Q", tip: $tip) { NSApp.terminate(nil) }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
+    }
+}
+
+/// The tabs across the top: one chip per list, in its own colour. Click to
+/// switch, double-click (or right-click ▸ Rename) to name it, + for a new one.
+private struct TabBar: View {
+    @EnvironmentObject var store: DocStore
+    @State private var renaming: UUID?
+    @State private var draft = ""
+    @FocusState private var renameFocus: UUID?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ScrollViewReader { scroller in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 3) {
+                        ForEach(store.tabs) { tab in
+                            chip(tab).id(tab.id)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                }
+                .onChange(of: store.currentID) { _, id in
+                    withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
+                }
+            }
+            Button {
+                commitRename()
+                store.addTab()
+                store.focusDocument()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("New tab  ⌘T")
+            .keyboardShortcut("t", modifiers: .command)
+            .padding(.trailing, 8)
+        }
+        .frame(height: 34)
+        .background(shortcuts)
+        .onChange(of: renameFocus) { _, focus in
+            // Clicking away from the name field keeps what was typed.
+            if focus == nil, renaming != nil { commitRename() }
+        }
+    }
+
+    /// Invisible buttons whose only job is to carry keyboard shortcuts.
+    private var shortcuts: some View {
+        Group {
+            Button("") { store.selectNeighbour(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
+            Button("") { store.selectNeighbour(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
+            ForEach(1..<10) { n in
+                Button("") { store.select(at: n - 1) }
+                    .keyboardShortcut(KeyEquivalent(Character(String(n))), modifiers: .command)
+            }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func chip(_ tab: ListTab) -> some View {
+        let selected = tab.id == store.currentID
+        let color = Color(nsColor: tab.nsColor)
+        let ink = Color(nsColor: LabelColors.textColor(for: tab.nsColor))
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            if renaming == tab.id {
+                TextField("Name", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ink)
+                    .focused($renameFocus, equals: tab.id)
+                    .onSubmit { commitRename() }
+                    .onExitCommand { cancelRename() }
+                    .frame(width: 96)
+            } else {
+                Text(tab.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(selected ? ink : Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 130)
+            }
+            if selected, renaming != tab.id {
+                Button { store.close(tab.id) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(ink.opacity(0.7))
+                        .frame(width: 14, height: 14)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(store.tabs.count == 1 ? "Empty this list" : "Close this tab")
+            }
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, selected && renaming != tab.id ? 5 : 10)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(selected ? color.opacity(0.18) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(color.opacity(selected ? 0.45 : 0), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .onTapGesture { if renaming != tab.id { store.select(tab.id); store.focusDocument() } }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { if renaming != tab.id { beginRename(tab) } })
+        .contextMenu {
+            Button("Rename") { beginRename(tab) }
+            Button("New Tab") { store.addTab() }
+            Divider()
+            Button(store.tabs.count == 1 ? "Empty This List" : "Close Tab") { store.close(tab.id) }
+        }
+        .help(renaming == tab.id ? "" : "Double-click to rename")
+    }
+
+    private func beginRename(_ tab: ListTab) {
+        commitRename()
+        store.select(tab.id)
+        draft = tab.name
+        renaming = tab.id
+        // The field exists only after this update lands; focus it once it does.
+        DispatchQueue.main.async { renameFocus = tab.id }
+    }
+
+    private func commitRename() {
+        guard let id = renaming else { return }
+        renaming = nil
+        renameFocus = nil
+        store.rename(id, to: draft)
+        refocusDocument()
+    }
+
+    private func cancelRename() {
+        renaming = nil
+        renameFocus = nil
+        refocusDocument()
+    }
+
+    /// SwiftUI settles its own focus after the field goes away; hand the
+    /// keyboard back to the document once that has happened, not before.
+    private func refocusDocument() {
+        DispatchQueue.main.async { store.focusDocument() }
     }
 }
 
@@ -244,6 +400,8 @@ private struct ShortcutsPanel: View {
         (["⌫"], "Right after a box, removes the box"),
         (["#"], "Type #word on a line to label it · colours pick themselves"),
         (["⌘", "L"], "Labels: click one for this line, or add a new one"),
+        (["⌘", "T"], "New tab · double-click a tab to rename it"),
+        (["⌘", "1-9"], "Jump to a tab · ⇧⌘[ and ⇧⌘] step through them"),
         (["⌘", "Z"], "Undo"),
         (["⇧", "⌘", "C"], "Copy the list as Markdown"),
     ]

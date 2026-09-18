@@ -9,7 +9,7 @@ struct PasteListApp: App {
             ContentView()
                 .environmentObject(store)
         } label: {
-            let c = store.counts
+            let c = store.totals
             Image(systemName: c.total > 0 && c.done == c.total ? "checklist.checked" : "checklist")
         }
         .menuBarExtraStyle(.window)

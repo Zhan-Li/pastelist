@@ -189,30 +189,99 @@ final class LabelColors {
     private func save() { UserDefaults.standard.set(assigned, forKey: key) }
 }
 
-/// The document is one string, persisted as-is.
+/// One tab: a named checklist document with its own colour. Tabs are the
+/// unit of persistence; the app holds a few of them and shows one at a time.
+struct ListTab: Identifiable, Codable, Equatable {
+    var id: UUID
+    var name: String
+    var text: String
+    /// Index into `LabelColors.palette`. Picked least-used-first when the tab
+    /// is made, so neighbouring tabs never share a colour by accident.
+    var color: Int
+
+    init(name: String, text: String = "", color: Int) {
+        id = UUID()
+        self.name = name
+        self.text = text
+        self.color = color
+    }
+
+    @MainActor var nsColor: NSColor { LabelColors.palette[color % LabelColors.palette.count] }
+}
+
+/// The tabs, which one is showing, and the cursor. Each tab's document is one
+/// string, persisted as-is; the whole set is saved as JSON on every change.
 @MainActor
 final class DocStore: ObservableObject {
-    @Published var text: String {
+    @Published private(set) var tabs: [ListTab] {
         didSet {
-            guard text != oldValue else { return }
-            UserDefaults.standard.set(text, forKey: key)
+            guard tabs != oldValue else { return }
+            save()
             LabelColors.shared.prune(keeping: labels)
         }
+    }
+    @Published private(set) var currentID: UUID {
+        didSet { UserDefaults.standard.set(currentID.uuidString, forKey: currentKey) }
     }
     /// Where the cursor is, so the Labels panel knows which line "this line" is.
     @Published var selection = NSRange(location: 0, length: 0)
     /// The live text view, for edits that must go through it (undo, selection).
     let textView = TextViewProxy()
 
-    private let key = "pastelist.document"
+    /// Each tab keeps its cursor while another tab is showing.
+    private var savedSelections: [UUID: NSRange] = [:]
+
+    private let tabsKey = "pastelist.tabs"
+    private let currentKey = "pastelist.currentTab"
+    /// 1.2 and earlier: one document, one string.
+    private let legacyKey = "pastelist.document"
 
     init() {
-        text = UserDefaults.standard.string(forKey: key) ?? ""
+        let defaults = UserDefaults.standard
+        let loaded: [ListTab]
+        if let data = defaults.data(forKey: tabsKey),
+           let saved = try? JSONDecoder().decode([ListTab].self, from: data), !saved.isEmpty {
+            loaded = saved
+        } else {
+            loaded = [ListTab(name: "List", text: defaults.string(forKey: legacyKey) ?? "", color: 0)]
+        }
+        let savedID = defaults.string(forKey: currentKey).flatMap(UUID.init)
+        tabs = loaded
+        currentID = loaded.first { $0.id == savedID }?.id ?? loaded[0].id
     }
 
+    private func save() {
+        if let data = try? JSONEncoder().encode(tabs) {
+            UserDefaults.standard.set(data, forKey: tabsKey)
+        }
+    }
+
+    // MARK: - The current tab
+
+    var currentIndex: Int { tabs.firstIndex { $0.id == currentID } ?? 0 }
+    var current: ListTab { tabs[currentIndex] }
+
+    /// The document that is showing. Edits land in the current tab.
+    var text: String {
+        get { current.text }
+        set { tabs[currentIndex].text = newValue }
+    }
+
+    /// Done / total for the tab that is showing.
     var counts: (done: Int, total: Int) { ChecklistParser.counts(inDocument: text) }
 
-    var labels: [String] { Labels.all(inDocument: text) }
+    /// Done / total across every tab, for the menu bar icon.
+    var totals: (done: Int, total: Int) {
+        tabs.reduce((0, 0)) { acc, tab in
+            let c = ChecklistParser.counts(inDocument: tab.text)
+            return (acc.0 + c.done, acc.1 + c.total)
+        }
+    }
+
+    /// Labels from every tab, so `#p1` on one list is one click away on another.
+    var labels: [String] {
+        Labels.all(inDocument: tabs.map(\.text).joined(separator: "\n"))
+    }
 
     /// Lowercased names of the labels on the cursor's line.
     var labelsOnCurrentLine: Set<String> {
@@ -221,6 +290,80 @@ final class DocStore: ObservableObject {
         let line = ns.lineRange(for: NSRange(location: min(selection.location, ns.length), length: 0))
         return Set(Labels.tokens(in: ns, range: line).map { $0.name.lowercased() })
     }
+
+    // MARK: - Tabs
+
+    func select(_ id: UUID) {
+        guard id != currentID, tabs.contains(where: { $0.id == id }) else { return }
+        savedSelections[currentID] = selection
+        currentID = id
+        selection = savedSelections[id] ?? NSRange(location: 0, length: 0)
+    }
+
+    func select(at index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        select(tabs[index].id)
+    }
+
+    /// Next (+1) or previous (-1) tab, wrapping around.
+    func selectNeighbour(_ step: Int) {
+        let n = tabs.count
+        select(at: ((currentIndex + step) % n + n) % n)
+    }
+
+    /// A fresh tab after the current one, named "List N", in the least-used colour.
+    func addTab() {
+        tabs.insert(ListTab(name: freshName(), color: freshColor()), at: currentIndex + 1)
+        select(tabs[currentIndex + 1].id)
+    }
+
+    func rename(_ id: UUID, to raw: String) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let i = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[i].name = name
+    }
+
+    /// Removes the tab. The last tab is not removed but emptied, so there is
+    /// always something to type into.
+    func close(_ id: UUID) {
+        guard let i = tabs.firstIndex(where: { $0.id == id }) else { return }
+        savedSelections[id] = nil
+        if tabs.count == 1 {
+            tabs[0] = ListTab(name: "List", color: tabs[0].color)
+            selection = NSRange(location: 0, length: 0)
+            return
+        }
+        tabs.remove(at: i)
+        if id == currentID {
+            currentID = tabs[min(i, tabs.count - 1)].id
+            selection = savedSelections[currentID] ?? NSRange(location: 0, length: 0)
+        }
+    }
+
+    private func freshName() -> String {
+        let taken = Set(tabs.map { $0.name.lowercased() })
+        var n = tabs.count + 1
+        while taken.contains("list \(n)") { n += 1 }
+        return "List \(n)"
+    }
+
+    private func freshColor() -> Int {
+        var counts = Array(repeating: 0, count: LabelColors.palette.count)
+        for t in tabs { counts[t.color % counts.count] += 1 }
+        // Least used; among those, the one furthest along from the current tab's colour
+        // reads as most different next to it.
+        let least = counts.min()!
+        let from = current.color
+        return counts.indices.filter { counts[$0] == least }
+            .max { distance(from, $0) < distance(from, $1) }!
+    }
+
+    private func distance(_ a: Int, _ b: Int) -> Int {
+        let n = LabelColors.palette.count, d = abs(a - b) % n
+        return min(d, n - d)
+    }
+
+    // MARK: - Editing helpers
 
     /// Puts `#name` on the current line, or takes it off if it is already there.
     func toggleLabel(_ name: String) { textView.view?.setLabel(name, on: nil) }

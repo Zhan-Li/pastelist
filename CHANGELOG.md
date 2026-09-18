@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0
+
+- Tabs. ⌘T (or the + at the top) opens another list beside the first, and
+  the popover shows one at a time. Double-click a tab, or right-click ▸
+  Rename, to name it. ⌘1–9 jump to a tab; ⇧⌘[ and ⇧⌘] step through them.
+- Every tab gets its own colour, chosen automatically from the label
+  palette so neighbouring tabs never match.
+- Each tab remembers its own cursor and has its own undo history. Closing
+  the last tab empties it rather than leaving nothing to type into.
+- The Labels panel now lists labels from every tab, so a label made on one
+  list is one click away on another. The menu bar icon reads as all-done
+  only when every tab is.
+- The list from 1.2 becomes the first tab on upgrade.
+
 ## 1.2.0
 
 - Labels. Type `#p1`, `#blocked`, any word, on a line and it is drawn as a
